@@ -60,12 +60,18 @@ def main() -> None:
     p.add_argument("--from-day", type=int, required=True)
     p.add_argument("--to-day", type=int, required=True)
     p.add_argument("--max-quarantine-ratio", type=float, default=0.01)
+    p.add_argument("--output", help="결과 JSON을 저장할 경로 (stdout에는 Spark 로그가 섞이므로 파일로 따로 남긴다)")
     args = p.parse_args()
 
     spark = build_spark(args.warehouse)
     try:
         summary = run_batch(spark, args.source, args.namespace, args.from_day, args.to_day, args.max_quarantine_ratio)
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        text = json.dumps(summary, ensure_ascii=False, indent=2)
+        print(text)
+        if args.output:
+            os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(text + "\n")
     finally:
         spark.stop()
 
