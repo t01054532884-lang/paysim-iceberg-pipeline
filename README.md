@@ -108,6 +108,14 @@ dq_results               배치마다 품질 검사 결과 기록 (실패 시 �
 - **배치 결과 JSON이 깨지던 문제**: 처음에는 `run_all.sh`에서 실행 결과를 `tee`로 받아 JSON 파일로 저장했습니다. 그런데 Spark가 의존성(Iceberg 런타임)을 불러오며 남기는 `:: loading settings ...` 로그가 표준 출력에 섞여 파일이 JSON으로 읽히지 않았습니다. 결과를 `--output` 옵션으로 파일에 따로 쓰도록 바꿨습니다. ([run.py](src/paysim_pipeline/run.py))
 - **결과 숫자를 손으로 옮기지 않도록**: 행 대조, 격리 사유, 잔액 불일치, 규칙 비교를 테이블에서 바로 뽑는 [report.py](src/paysim_pipeline/report.py)를 만들어 README 숫자의 근거를 [docs/results.md](docs/results.md)로 남겼습니다.
 
+## AI 코딩 도구 활용
+
+이 프로젝트는 **Claude Code**(Anthropic의 AI 코딩 도구)를 함께 사용해 만들었습니다. 커밋마다 `Co-Authored-By: Claude`로 표시되어 있습니다.
+
+- **역할 분담**: 무엇을 검증할지(증분 적재, 재실행 안전성, 품질 검사, Iceberg 기능)와 결과 해석은 제가 정했습니다. 코드 작성과 리뷰는 Claude와 함께 진행했습니다.
+- **AI가 만든 코드를 그대로 믿지 않도록**: 15행 샘플 테스트(GitHub Actions), 배치마다 하는 행 대조 검사, 전체 데이터 실행 결과로 동작을 확인했습니다. 위의 JSON 깨짐 문제도 테스트에서는 드러나지 않고 실제 실행에서 발견해 고친 것입니다.
+- **결과 숫자**: README의 숫자는 모두 실행 출력([docs/](docs/))에서 그대로 옮겼습니다.
+
 ## 한계와 다음에 해 볼 것
 
 - 로컬 Hadoop 카탈로그라 동시에 여러 작업이 쓰는 상황은 다루지 않았습니다. REST/Glue 카탈로그와 S3로 옮겨 보고 싶습니다.
