@@ -1,0 +1,53 @@
+{
+  "batch_id": "days_008_014",
+  "silver": {
+    "valid_rows": 2854592,
+    "duplicate_rows": 0,
+    "quarantined_rows": 3
+  },
+  "checks": [
+    {
+      "check_name": "row_reconciliation_diff",
+      "metric": 0.0,
+      "threshold": 0.0,
+      "passed": true
+    },
+    {
+      "check_name": "silver_duplicate_tx_id",
+      "metric": 0.0,
+      "threshold": 0.0,
+      "passed": true
+    },
+    {
+      "check_name": "silver_null_required",
+      "metric": 0.0,
+      "threshold": 0.0,
+      "passed": true
+    },
+    {
+      "check_name": "silver_non_positive_amount",
+      "metric": 0.0,
+      "threshold": 0.0,
+      "passed": true
+    },
+    {
+      "check_name": "silver_unknown_tx_type",
+      "metric": 0.0,
+      "threshold": 0.0,
+      "passed": true
+    },
+    {
+      "check_name": "gold_vs_silver_count_diff",
+      "metric": 0.0,
+      "threshold": 0.0,
+      "passed": true
+    },
+    {
+      "check_name": "quarantine_ratio",
+      "metric": 1.0509371732242228e-06,
+      "threshold": 0.01,
+      "passed": true
+    }
+  ],
+  "seconds": 87.0
+}
