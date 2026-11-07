@@ -50,10 +50,12 @@ def maintain(spark: SparkSession, ns: str, name: str, retain_last: int) -> dict:
     """).first()
     spark.sql(f"CALL local.system.rewrite_manifests('{ident}')")
     # 위 두 작업도 스냅샷을 만들기 때문에 만료는 마지막에 한다.
+    # 프로시저 인자에는 함수를 쓸 수 없어서 현재 시각을 리터럴로 넘긴다.
+    now = scalar(spark, "SELECT date_format(current_timestamp(), 'yyyy-MM-dd HH:mm:ss.SSS')")
     expire = spark.sql(f"""
         CALL local.system.expire_snapshots(
             table => '{ident}',
-            older_than => current_timestamp(),
+            older_than => TIMESTAMP '{now}',
             retain_last => {retain_last}
         )
     """).first()
