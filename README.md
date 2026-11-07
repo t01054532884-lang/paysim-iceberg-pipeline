@@ -1,7 +1,7 @@
 # PaySim → Apache Iceberg 적재 파이프라인 (PySpark)
 
 모바일 송금 거래 **636만 건**을 PySpark로 읽어 **Apache Iceberg** 테이블에 bronze → silver → gold 순서로 적재한 개인 프로젝트입니다.
-하루치 거래가 매일 들어온다고 가정하고, 데이터 엔지니어링 업무에서 중요한 **증분 적재, 재실행 안전성(멱등성), 데이터 품질 검사, 테이블 이력 관리**를 직접 구현하고 전체 데이터로 검증했습니다.
+하루치 거래가 매일 들어온다고 가정하고, 데이터 엔지니어링 업무에서 중요한 **증분 적재, 재실행 안전성(멱등성), 데이터 품질 검사, 테이블 이력·유지보수, 스케줄링**을 직접 구현하고 전체 데이터로 검증했습니다.
 
 > 데이터: [PaySim (Kaggle, ealaxi/paysim1)](https://www.kaggle.com/datasets/ealaxi/paysim1). 실제 모바일 머니 거래 로그를 바탕으로 **시뮬레이터가 만든 합성 데이터**이며 실제 고객 거래가 아닙니다. 데이터 파일은 레포에 포함하지 않습니다.
 
@@ -15,8 +15,10 @@
 | 같은 배치 재실행 | silver에 새로 들어간 행 **0건**, 전체 행 수 변화 없음 |
 | 품질 검사 | 배치마다 7개 검사, 모든 배치 통과 |
 | Iceberg 기능 | 스냅샷 이력, Time travel, Schema/Partition evolution, Rollback 실행 결과 기록 |
+| 테이블 유지보수 | compaction·manifest 정리·스냅샷 만료, 전후 행 수가 같은지 검사 (스냅샷 7→2, 지난 파일 7개 삭제) |
+| 스케줄링 | Airflow DAG: 하루 = 시뮬레이션 하루, catchup 백필, 7일마다 유지보수. `airflow dags test`로 실행 확인 |
 
-실제 실행 출력: [docs/results.md](docs/results.md) · [docs/iceberg_demo.md](docs/iceberg_demo.md) · 배치별 JSON([1~7일](docs/batch_1_7.json), [8~14일](docs/batch_8_14.json), [15~21일](docs/batch_15_21.json), [22~28일](docs/batch_22_28.json), [29~31일](docs/batch_29_31.json), [재실행](docs/rerun_1_7.json))
+실제 실행 출력: [docs/results.md](docs/results.md) · [docs/iceberg_demo.md](docs/iceberg_demo.md) · [docs/maintenance.md](docs/maintenance.md) · [docs/airflow_dags_test.md](docs/airflow_dags_test.md) · 배치별 JSON([1~7일](docs/batch_1_7.json), [8~14일](docs/batch_8_14.json), [15~21일](docs/batch_15_21.json), [22~28일](docs/batch_22_28.json), [29~31일](docs/batch_29_31.json), [재실행](docs/rerun_1_7.json))
 
 ## 구조
 
@@ -103,9 +105,52 @@ dq_results               배치마다 품질 검사 결과 기록 (실패 시 �
 | Partition evolution | `sim_day` 파티션에 `tx_type` 추가 후 4일차 적재 | 기존 파일(spec 0) 3개·1,030,563행과 새 파일(spec 1) 5개·28,240행이 한 테이블에 공존 |
 | Rollback | `rollback_to_snapshot`으로 UPDATE 이전으로 복구 | 복구 후 `review_status` 값이 있는 행 0 |
 
+## 테이블 유지보수
+
+배치를 반복하면 스냅샷과 작은 파일이 쌓이고, 덮어쓴 옛 파일도 스냅샷이 참조하는 동안 지워지지 않습니다. [maintenance.py](src/paysim_pipeline/maintenance.py)가 bronze·silver·격리 테이블에 아래를 차례로 실행합니다.
+
+1. `rewrite_data_files`: 파티션 안의 작은 파일 합치기 (compaction)
+2. `rewrite_manifests`: 파일 목록(manifest) 다시 묶기
+3. `expire_snapshots`: 최근 2개만 남기고 오래된 스냅샷과 그 스냅샷만 쓰던 파일 삭제. 앞의 두 작업도 스냅샷을 만들기 때문에 마지막에 합니다.
+
+작업 전후 행 수가 다르면 실패로 처리합니다. 전체 데이터 결과([docs/maintenance.md](docs/maintenance.md)):
+
+| 테이블 | 데이터 파일 | 스냅샷 | 행 수 | 만료로 지운 파일 |
+|---|---|---|---:|---:|
+| bronze_transactions | 31 → 31 | 7 → 2 | 6,362,620 (변화 없음) | 7 |
+| silver_transactions | 31 → 31 | 6 → 2 | 6,362,604 (변화 없음) | 0 |
+| silver_quarantine | 12 → 12 | 4 → 2 | 16 (변화 없음) | 0 |
+
+- **compaction으로 합친 파일은 0개**였습니다. 7일 배치는 파티션(하루)마다 파일을 하나씩(평균 약 13MB) 써서 합칠 작은 파일이 없었습니다. 하루치를 여러 번 나눠 넣는 스트리밍·마이크로배치에서 필요한 작업이라고 판단했습니다.
+- **bronze에서 지운 파일 7개**는 1~7일차 재실행 때 덮어쓴 옛 파일입니다. 덮어쓰기 뒤에도 스냅샷 만료 전까지는 저장 공간을 계속 차지한다는 점을 확인했습니다. silver는 `MERGE INTO`로 추가만 해서 지울 파일이 없었습니다.
+- 만료 후에는 첫 배치 시점으로 time travel이 불가능해집니다. 그래서 Iceberg 기능 실행 다음에 유지보수를 돌립니다.
+
+## Airflow 스케줄링
+
+[dags/paysim_daily.py](dags/paysim_daily.py): Airflow 실행 날짜 하루를 시뮬레이션 하루로 보고(2026-01-01 = sim_day 1) 하루치씩 적재합니다.
+
+```
+load_day ──► is_week_end ──► maintain
+              (7일째·마지막 날만 통과)
+```
+
+| 설정 | 이유 |
+|---|---|
+| `catchup=True`, 시작·종료일 지정 | 31일치를 백필할 수 있게 함. 적재가 멱등이라 같은 날짜를 다시 돌려도 안전 |
+| `max_active_runs=1` | 로컬 Hadoop 카탈로그는 여러 작업이 동시에 커밋하는 상황을 다루지 않아서 한 번에 한 날짜만 실행 |
+| `retries=2` | 일시적인 실패는 다시 시도. 재실행해도 결과가 같으므로 재시도가 안전 |
+| `ShortCircuitOperator` | 유지보수는 매일이 아니라 7일마다 실행 |
+| Airflow 가상환경 분리 | Airflow 의존성이 PySpark 환경과 충돌하지 않도록 따로 설치하고, 작업은 `PAYSIM_PYTHON`으로 실행 |
+
+`airflow dags test`로 두 날짜를 실제 데이터에 돌린 결과([docs/airflow_dags_test.md](docs/airflow_dags_test.md)):
+
+- **2026-01-07 (sim_day 7)**: `load_day`(420,583행, 68.2초) → `is_week_end` 통과 → `maintain`, 세 작업 모두 성공
+- **2026-01-08 (sim_day 8)**: `load_day`(449,637행, 35.8초) → `is_week_end`에서 조건 False → `maintain` 건너뜀
+
 ## 문제 해결 기록
 
 - **배치 결과 JSON이 깨지던 문제**: 처음에는 `run_all.sh`에서 실행 결과를 `tee`로 받아 JSON 파일로 저장했습니다. 그런데 Spark가 의존성(Iceberg 런타임)을 불러오며 남기는 `:: loading settings ...` 로그가 표준 출력에 섞여 파일이 JSON으로 읽히지 않았습니다. 결과를 `--output` 옵션으로 파일에 따로 쓰도록 바꿨습니다. ([run.py](src/paysim_pipeline/run.py))
+- **`expire_snapshots`에 `current_timestamp()`를 넘기면 실패**: Iceberg 프로시저 인자는 리터럴만 받습니다. 현재 시각을 먼저 조회한 뒤 `TIMESTAMP '...'` 리터럴로 넘기도록 고쳤습니다.
 - **결과 숫자를 손으로 옮기지 않도록**: 행 대조, 격리 사유, 잔액 불일치, 규칙 비교를 테이블에서 바로 뽑는 [report.py](src/paysim_pipeline/report.py)를 만들어 README 숫자의 근거를 [docs/results.md](docs/results.md)로 남겼습니다.
 
 ## AI 코딩 도구 활용
@@ -120,8 +165,8 @@ dq_results               배치마다 품질 검사 결과 기록 (실패 시 �
 
 - 로컬 Hadoop 카탈로그라 동시에 여러 작업이 쓰는 상황은 다루지 않았습니다. REST/Glue 카탈로그와 S3로 옮겨 보고 싶습니다.
 - 배치마다 CSV 전체를 읽고 날짜로 거릅니다. 실제 환경처럼 일자별 파일로 나눠 들어오는 구조로 바꾸면 읽는 양을 줄일 수 있습니다.
-- 작은 파일이 쌓이면 Iceberg `rewrite_data_files`·`expire_snapshots` 같은 유지보수 작업이 필요합니다. 아직 적용하지 않았습니다.
-- 배치 실행은 셸 스크립트로 순서대로 돌립니다. Airflow 같은 스케줄러로 옮기면 재시도와 백필을 더 체계적으로 할 수 있습니다.
+- Airflow는 `airflow dags test`로 날짜 2개만 돌려 봤습니다. 스케줄러로 31일 전체를 백필하는 것과, 품질 검사 실패 시 알림을 보내는 것은 아직 하지 않았습니다.
+- Kafka 같은 스트리밍 소스로 받아 마이크로배치로 적재해 보고 싶습니다. 그때는 위에서 할 일이 없었던 compaction이 실제로 필요해집니다.
 
 ## 실행 방법 (GitHub Codespaces)
 
@@ -133,7 +178,8 @@ Spark에 Java가 필요해서 Java 17과 Python 3.11이 들어 있는 devcontain
 
 ```bash
 bash scripts/download_paysim.sh   # data/raw/ 로 내려받기
-bash scripts/run_all.sh           # 7일 단위 배치 5번 + 1~7일차 재실행 + 결과 리포트 + Iceberg 기능 실행
+bash scripts/run_all.sh           # 7일 단위 배치 5번 + 1~7일차 재실행 + 결과 리포트 + Iceberg 기능 + 유지보수
+bash scripts/airflow_dags_test.sh 2026-01-07   # Airflow를 별도 가상환경에 설치하고 하루치 DAG 실행
 ```
 
 배치 하나만 돌릴 때:
@@ -152,4 +198,4 @@ GitHub Actions가 push마다 같은 테스트를 실행합니다.
 
 ## 기술 스택
 
-PySpark 3.5 · Apache Iceberg 1.6 (Hadoop catalog) · pytest · GitHub Actions · Dev Containers
+PySpark 3.5 · Apache Iceberg 1.6 (Hadoop catalog) · Apache Airflow 2.10 · pytest · GitHub Actions · Dev Containers

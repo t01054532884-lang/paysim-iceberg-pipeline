@@ -2,11 +2,14 @@
 
 `bash scripts/airflow_dags_test.sh <날짜>` (`airflow dags test`) 출력에서 작업 상태 줄만 옮겼습니다.
 
-## 2026-01-07 (sim_day 7)
+## 2026-01-07 (sim_day 7): 7일째라 유지보수까지 실행
 
 ```
-DagRun Finished: dag_id=paysim_daily, execution_date=2026-01-07 00:00:00+00:00
-state=success
+Marking task as SUCCESS. dag_id=paysim_daily, task_id=load_day
+Condition result is True
+Marking task as SUCCESS. dag_id=paysim_daily, task_id=is_week_end
+Marking task as SUCCESS. dag_id=paysim_daily, task_id=maintain
+DagRun Finished: dag_id=paysim_daily, execution_date=2026-01-07 00:00:00+00:00 ... state=success
 ```
 
 load_day 결과:
@@ -67,11 +70,14 @@ load_day 결과:
 }
 ```
 
-## 2026-01-08 (sim_day 8)
+## 2026-01-08 (sim_day 8): 7일째가 아니라 유지보수 건너뜀
 
 ```
-DagRun Finished: dag_id=paysim_daily, execution_date=2026-01-08 00:00:00+00:00
-state=success
+Marking task as SUCCESS. dag_id=paysim_daily, task_id=load_day
+Condition result is False
+Skipping downstream tasks
+Marking task as SUCCESS. dag_id=paysim_daily, task_id=is_week_end
+DagRun Finished: dag_id=paysim_daily, execution_date=2026-01-08 00:00:00+00:00 ... state=success
 ```
 
 load_day 결과:
