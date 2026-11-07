@@ -17,3 +17,6 @@ python -m paysim_pipeline.run --source "$SOURCE" --from-day 1 --to-day 7 --outpu
 
 python -m paysim_pipeline.report
 python -m paysim_pipeline.iceberg_demo
+
+# 작은 파일 합치기·스냅샷 만료 (Iceberg 기능 실행 뒤에 해야 time travel 결과가 남는다)
+python -m paysim_pipeline.maintenance

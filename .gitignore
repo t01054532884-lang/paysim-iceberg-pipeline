@@ -9,3 +9,6 @@ __pycache__/
 .venv/
 kaggle.json
 .env
+logs/
+.airflow/
+.venv-airflow/
